@@ -13,3 +13,6 @@ Designed for speed and efficiency, making it suitable for real-time or resource-
 ### Python Interface
 Uses Cython to interface the C++ backend with Python.
 
+### Use it 
+ you need to run `setup.py` file in triminal  `python setup.py build_ext --inplace`
+ and import framework into python files

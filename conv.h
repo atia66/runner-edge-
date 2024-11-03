@@ -9,6 +9,8 @@
 #include <omp.h>
 #include "Structs.h"
 
+
+
 class Layer
 {
 public:
@@ -22,6 +24,7 @@ public:
     }
 
 private:
+    
     void initialize_weights_and_biases(int input_size, int output_size, int Ksize)
     {
         std::random_device rd;
@@ -55,11 +58,26 @@ class Linear
 
 public:
     Fcweight w_b;
+    bool training_state = true;
     Linear() : w_b() {};
     Linear(int input_size, int outputsize) : w_b(input_size, outputsize)
     {
         output_size = outputsize;
         initialize_weights_and_biases(input_size, output_size);
+    }
+    
+    bool Training_state()
+    {
+        return training_state;
+    }
+    vector<vector<float>> get_weight()
+    {
+        return w_b.weight;
+    }
+
+    vector<float> get_bias()
+    {
+        return w_b.bais;
     }
     vector<float> Fclayer(Tensor img)
     {
@@ -90,7 +108,7 @@ public:
         }
         return output;
     }
-    void backward(vector<float> gradlayer, vector<float> input, float learning_rate)
+    void backward1d(vector<float> gradlayer, vector<float> input, float learning_rate)
     {
         int out_layers = w_b.weight.size();
         int in_layers = w_b.weight[0].size();
@@ -105,7 +123,7 @@ public:
             w_b.bais[out] -= learning_rate * gradlayer[out];
         }
     }
-    void backward(vector<float> gradlayer, Tensor Input, float learning_rate)
+    void backward3d(vector<float> gradlayer, Tensor Input, float learning_rate)
     {
         vector<float> input = apply_flatten(Input);
         int out_layers = w_b.weight.size();
@@ -175,37 +193,74 @@ private:
         return flatten;
     }
 };
+
 class convlve2d
 {
     int stride;
     int padding;
     int Ksize;
     int lay_input_channel;
+    int channel;
+    int height;
+    int width;
 
 public:
     Layer lay;
+
     convlve2d() : lay() {}
-    convlve2d(int input_size, int output_size, int Kernel_size)
+    convlve2d(int input_size, int output_size, int Kernel_size,  int Stride = 1, int Padding = 0)
         : lay(input_size, output_size, Kernel_size)
-    {
-        Ksize = Kernel_size;
-        lay_input_channel = input_size;
-    }
-
-    Tensor conv(Tensor img, int Stride = 1, int Padding = 0)
-
     {
         stride = Stride;
         padding = Padding;
+        Ksize = Kernel_size;
+        lay_input_channel = input_size;
+    }
+    vector<vector<vector<vector<float>>>> get_weight()
+    {
+        return lay.w_b.weight;
+    }
+
+
+    bool Training_state()
+    {
+        return lay.toggle;
+    }
+    vector<float> get_bias()
+    {
+        return lay.w_b.bais;
+    }
+    
+
+//     Batch conv(Batch images){
+//         int batch_size = images.batch.size();
+//         Batch output (batch_size);
+//         vector<Tensor> temp_output; 
+
+// #pragma omp parallel for
+//         for (int i = 0; i < batch_size;++i){
+//             Tensor processed_tensor = (conv(images.batch[i]));
+// #pragma omp critical 
+//             temp_output.push_back(processed_tensor);
+//         }
+//         output.batch = move(temp_output);
+
+//         return output;
+//     }
+    Tensor conv(Tensor img)
+    {
+        
         int img_channel = img.image.size();
         int img_height = img.image[0].size();
         int img_width = img.image[0][0].size();
 
         // int input_channel = lay.w_b.weight.size();
         int output_channel = lay.w_b.weight[0].size();
-
         int output_height = (img_height + 2 * padding - Ksize) / stride + 1;
         int output_width = (img_width + 2 * padding - Ksize) / stride + 1;
+        channel = output_channel;
+        height = output_height;
+        width = output_width;
 
         Tensor padding_img(img_channel, img_height + 2 * padding, img_width + 2 * padding);
         Tensor output(output_channel, output_height, output_width);
@@ -215,15 +270,62 @@ public:
         output = perform_convolution(pad_img, output);
         return output;
     }
-    void backward_conv(Tensor grad_layer, Tensor brev_idden_layer, float learning_rate)
+    void backward_conv3d(Tensor grad_layer, Tensor brev_idden_layer, float learning_rate)
     {
+        int input_channel = lay.w_b.weight.size();       
+        int output_channel = lay.w_b.weight[0].size();
+        int height = brev_idden_layer.image[0].size();
+        int width = brev_idden_layer.image[0][0].size();
+        int grad_height = grad_layer.image[0].size();   
+        int grad_width = grad_layer.image[0][0].size();  
+        int Kernel_size = lay.w_b.weight[0][0].size();  
+#pragma omp parallel for
+
+        for (int ch = 0; ch < input_channel; ++ch)
+        {
+            for (int out = 0; out < output_channel; ++out)
+            {
+                for (int h = 0; h <= height - Kernel_size; h+=stride)
+                {
+                    for (int w = 0; w <= width - Kernel_size; h+=stride)
+                    {
+                        for (int kh = 0; kh < Kernel_size; ++kh)
+                        {
+                            for (int kw = 0; kw < Kernel_size; ++kw)
+                            {
+                                lay.w_b.weight[ch][out][kh][kw] -= learning_rate *
+                                                                   grad_layer.image[out][h][w] * brev_idden_layer.image[ch][h + kh][w + kw];
+                            }
+                        }
+                    }
+                }
+
+                float bias_grad = 0;
+                for (int h = 0; h < grad_height; ++h)
+                {
+                    for (int w = 0; w < grad_width; ++w)
+                    {
+                        bias_grad += grad_layer.image[out][h][w];
+                    }
+                }
+                // Apply learning rate to bias update
+                lay.w_b.bais[out] -= learning_rate * bias_grad;
+            }
+        }
+    }
+
+    void backward_conv1d(vector<float> grad_layer, Tensor brev_idden_layer, float learning_rate)
+    {
+        Tensor shape(channel, height, width);
+        Tensor Grad_layer = reversed_flatten(grad_layer,shape);
         int input_channel = lay.w_b.weight.size();       // Number of input channels
         int output_channel = lay.w_b.weight[0].size();   // Number of output channels
         int height = brev_idden_layer.image[0].size();   // Height of input image
         int width = brev_idden_layer.image[0][0].size(); // Width of input image
-        int grad_height = grad_layer.image[0].size();    // Height of gradient (output gradient)
-        int grad_width = grad_layer.image[0][0].size();  // Width of gradient (output gradient)
         int Kernel_size = lay.w_b.weight[0][0].size();   // Kernel size
+        int grad_height = (height + 2 * padding - Kernel_size) / stride + 1;
+        int grad_width = (width + 2 * padding - Kernel_size) / stride + 1;
+
 #pragma omp parallel for
 
         // Loop over input channels
@@ -233,17 +335,20 @@ public:
             for (int out = 0; out < output_channel; ++out)
             {
                 // Loop over the input feature map with correct bounds
-                for (int h = 0; h <= height - Kernel_size; ++h)
+                for (int h = 0; h <=grad_height; ++h)
                 {
-                    for (int w = 0; w <= width - Kernel_size; ++w)
+                    for (int w = 0; w <= grad_width; ++w)
                     {
-                        // Update weights using the gradients
+                        float grad_value = Grad_layer.image[out][h][w];
+                        int base_h = h * stride - padding;
+                        int base_w = w * stride - padding;
+
                         for (int kh = 0; kh < Kernel_size; ++kh)
                         {
                             for (int kw = 0; kw < Kernel_size; ++kw)
                             {
                                 lay.w_b.weight[ch][out][kh][kw] -= learning_rate *
-                                                                   grad_layer.image[out][h][w] * brev_idden_layer.image[ch][h + kh][w + kw];
+                                                                   Grad_layer.image[out][h][w] * brev_idden_layer.image[ch][h + kh][w + kw];
                             }
                         }
                     }
@@ -256,7 +361,7 @@ public:
                     for (int w = 0; w < grad_width; ++w)
                     {
                         // Accumulate the gradient for bias
-                        bias_grad += grad_layer.image[out][h][w];
+                        bias_grad += Grad_layer.image[out][h][w];
                     }
                 }
                 // Apply learning rate to bias update
@@ -265,7 +370,7 @@ public:
         }
     }
 
-    Tensor grid_conv(Tensor grad_layer)
+    Tensor grid_conv3d(Tensor grad_layer)
     {
         int input_size = lay.w_b.weight.size();
         int output_size = lay.w_b.weight[0].size();
@@ -274,8 +379,76 @@ public:
         int height = grad_layer.image[0].size();
         int width = grad_layer.image[0][0].size();
 
-        Tensor padding(channel, height + 2 * (Kernel_size - 1), width + 2 * (Kernel_size - 1));
-        Tensor pad_img = pade_img(Kernel_size - 1, padding, grad_layer);
+        int out_height = (height - Kernel_size + 2 * padding) / stride + 1;
+        int out_width = (width - Kernel_size + 2 * padding) / stride + 1;
+        Tensor padding_img(channel, height + 2 * padding, width + 2 * padding);
+        Tensor pad_img = pade_img(padding, padding_img, grad_layer);
+
+        Weights flip_kernel(input_size, output_size, Kernel_size);
+        Tensor output(input_size, out_height, out_width);
+
+        for (int in = 0; in < input_size; ++in)
+        {
+            for (int out = 0; out < output_size; ++out)
+            {
+                for (int kh = 0; kh < Kernel_size; ++kh)
+                {
+                    for (int kw = 0; kw < Kernel_size; ++kw)
+                    {
+                        flip_kernel.weight[in][out][Kernel_size - kh - 1][Kernel_size - kw - 1] = lay.w_b.weight[in][out][kh][kw];
+                    }
+                }
+            }
+        }
+
+        for (int out = 0; out < output_size; ++out)
+        {
+
+            for (int in = 0; in < input_size; ++in)
+            {
+                for (int h = 0; h < out_height; h += stride)
+                {
+                    for (int w = 0; w < out_width; w += stride)
+                    {
+                        float sum = 0;
+                        for (int kh = 0; kh < Kernel_size; ++kh)
+                        {
+                            for (int kw = 0; kw < Kernel_size; ++kw)
+                            {
+                                int h_in = h * stride + kh;
+                                int w_in = w * stride + kw;
+
+                                // Ensure within bounds of the padded image
+                                if (h_in < pad_img.image[out].size() && w_in < pad_img.image[out][0].size())
+                                {
+                                    sum += pad_img.image[out][h_in][w_in] * flip_kernel.weight[in][out][kh][kw];
+                                }
+                            }
+                        }
+                        output.image[in][h][w] += sum;
+                    }
+                }
+            }
+        }
+        return output;
+    }
+
+    Tensor grid_conv1d(vector<float> Grad_layer)
+    {
+        Tensor shape(channel, height, width);
+        Tensor grad_layer = reversed_flatten(Grad_layer, shape);
+        int input_size = lay.w_b.weight.size();
+        int output_size = lay.w_b.weight[0].size();
+        int Kernel_size = lay.w_b.weight[0][0].size();
+        int channel = grad_layer.image.size();
+        int height = grad_layer.image[0].size();
+        int width = grad_layer.image[0][0].size();
+        int out_height = (height - Kernel_size + 2 * padding) / stride + 1;
+        int out_width = (width - Kernel_size + 2 * padding) / stride + 1;
+
+        Tensor padding_img(channel, height + 2 * padding, width + 2 * padding);
+        Tensor pad_img = pade_img(padding, padding_img, grad_layer);
+
         Weights flip_kernel(input_size, output_size, Kernel_size);
         Tensor output(input_size, height + Kernel_size - 1, width + Kernel_size - 1);
 
@@ -298,25 +471,25 @@ public:
 
             for (int in = 0; in < input_size; ++in)
             {
-                for (int h = 0; h < height + 2 * (Kernel_size - 1); ++h)
+                for (int h = 0; h < out_height; ++h)
                 {
-                    for (int w = 0; w < width + 2 * (Kernel_size - 1); ++w)
+                    for (int w = 0; w < out_width; ++w)
                     {
                         float sum = 0;
                         for (int kh = 0; kh < Kernel_size; ++kh)
                         {
                             for (int kw = 0; kw < Kernel_size; ++kw)
                             {
-                                if ((h + kh) < pad_img.image[out].size() && (w + kw) < pad_img.image[out][0].size())
+                                int h_in = h * stride + kh;
+                                int w_in = w * stride + kw;
+
+                                if (h_in < pad_img.image[out].size() && w_in < pad_img.image[out][0].size())
                                 {
-                                    sum += pad_img.image[out][h + kh][w + kw] * flip_kernel.weight[in][out][kh][kw];
+                                    sum += pad_img.image[out][h_in][w_in] * flip_kernel.weight[in][out][kh][kw];
                                 }
                             }
                         }
-                        if (h < output.image[in].size() && w < output.image[in][0].size())
-                        {
-                            output.image[in][h][w] += sum;
-                        }
+                        output.image[in][h][w] += sum;
                     }
                 }
             }
@@ -345,7 +518,25 @@ private:
         }
         return padding_img;
     }
+    Tensor reversed_flatten(vector<float> grad, Tensor maxpool)
+    {
 
+        int channel = maxpool.image.size();
+        int height = maxpool.image[0].size();
+        int width = maxpool.image[0][0].size();
+        Tensor output(channel, height, width);
+        for (int ch = 0; ch < channel; ++ch)
+        {
+            for (int h = 0; h < height; ++h)
+            {
+                for (int w = 0; w < width; ++w)
+                {
+                    output.image[ch][h][w] = grad[w + h * (width) + ch * (width * height)];
+                }
+            }
+        }
+        return output;
+    }
     // Perform convolution
     Tensor perform_convolution(Tensor padding_img, Tensor output)
     {
@@ -393,29 +584,27 @@ private:
 
 class maxpool
 {
+    int stride;
+    int kernel_size;
+
 public:
-    maxpool()
+    // maxpool(){
+        
+    // }
+    maxpool(int Stride = 2, int Kernel_size = 2)
     {
+        stride = Stride;
+        kernel_size = Kernel_size;
     }
-    Tensor maxipool(Tensor image, int stride = 2, int kernel_size = 2)
+    Tensor maxipool(Tensor image)
     {
         int channel = image.image.size();
         int height = image.image[0].size();
         int width = image.image[0][0].size();
-        int out_height = height / stride; // Truncate the extra row
-        int out_width = width / stride;   // Truncate the extra column
+        int out_height = (height - kernel_size) / stride + 1;
+        int out_width = (width - kernel_size) / stride + 1;
         Tensor output(channel, out_height, out_width);
-        try
-        {
-            if (kernel_size != stride)
-            {
-                throw logic_error("cant maxipool with that parameter ");
-            }
-        }
-        catch (const std::logic_error &e)
-        {
-            std::cerr << "Error: " << e.what() << std::endl;
-        }
+        
 #pragma omp parallel for collapse(2) schedule(static) // Collapsing and static scheduling
 
         for (int ch = 0; ch < channel; ++ch)

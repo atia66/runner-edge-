@@ -1,6 +1,6 @@
 # Runner Edge
 
-Runner Edge is a custom deep learning framework built in C++ with a Python interface. It captures essential features of popular libraries like PyTorch, focusing on high performance and acceptable time complexity.
+Runner Edge is a custom deep learning framework built in C++ with a Python interface. It captures essential features of popular libraries like PyTorch, focusing on high performance and acceptable time complexity, used for computer vision and CNN till now.
 
 ## Key Features
 
